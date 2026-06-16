@@ -38,6 +38,56 @@ vcode                                      # run it in any folder
 
 ---
 
+## 📱 On a phone (Android or iPhone)
+
+vcode and Vanta are pure Python, so they run in a mobile terminal app. You'll
+need an **API key** and **internet**.
+
+### Android — [Termux](https://f-droid.org/packages/com.termux/)
+Install **Termux from F-Droid** (the Play Store build is outdated). Then:
+```sh
+pkg update -y && pkg install -y python
+curl -fsSL https://raw.githubusercontent.com/Juanshep1/vanbrew/main/install.sh | sh
+. ~/.bashrc 2>/dev/null ; . ~/.profile 2>/dev/null
+vanbrew install vanta vcode
+export OPENROUTER_API_KEY="sk-or-..."     # or ANTHROPIC_API_KEY / OLLAMA_API_KEY
+vcode
+```
+
+### iPhone / iPad — [iSH](https://apps.apple.com/app/ish-shell/id1436902243)
+Install **iSH** from the App Store (a tiny Linux shell). Then:
+```sh
+apk update && apk add python3 curl
+curl -fsSL https://raw.githubusercontent.com/Juanshep1/vanbrew/main/install.sh | sh
+. ~/.profile
+vanbrew install vanta vcode
+export OPENROUTER_API_KEY="sk-or-..."
+vcode
+```
+
+### Any terminal with Python (fallback — also works in a-Shell on iOS)
+If a package manager or the installer isn't available, download the two files
+with Python itself and make them commands with aliases:
+```sh
+mkdir -p ~/bin
+python3 -c "import urllib.request as u;[u.urlretrieve(a,b) for a,b in [('https://raw.githubusercontent.com/Juanshep1/vcode/main/vcode.py', __import__('os').path.expanduser('~/bin/vcode.py')),('https://raw.githubusercontent.com/Juanshep1/vanta/main/vanta.py', __import__('os').path.expanduser('~/bin/vanta.py'))]]"
+echo "alias vcode='python3 ~/bin/vcode.py'" >> ~/.profile
+echo "alias vanta='python3 ~/bin/vanta.py'" >> ~/.profile
+. ~/.profile
+export OPENROUTER_API_KEY="sk-or-..."
+vcode
+```
+
+**To keep your key**, append it too: `echo 'export OPENROUTER_API_KEY="sk-or-..."' >> ~/.profile`.
+
+> **On phones:** vcode is great for writing, editing, running and chatting about
+> Vanta on the go. The one desktop-only feature is `run_app`'s **movable app
+> window** (it needs a desktop browser) — for visual apps, run a `serve()`
+> program and open `http://localhost:<port>` in your phone's browser. iSH is
+> emulated, so it's slower than Termux.
+
+---
+
 ## What it does
 
 ```
