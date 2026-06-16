@@ -17,21 +17,16 @@ On launch the wordmark is swept by a "vantablack dusk" gradient (indigo → viol
 
 ## Install
 
-**One-liner:**
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Juanshep1/vcode/main/install.sh | sh
+vanbrew install vcode    # or:  curl -fsSL https://raw.githubusercontent.com/Juanshep1/vcode/main/install.sh | sh
+vcode                    # first run walks you through adding an API key
 ```
 
-**Or via [Vanbrew](https://github.com/Juanshep1/vanbrew):**
-```sh
-vanbrew install vcode
-```
-
-Then bring a key and run it:
-```sh
-export ANTHROPIC_API_KEY="sk-ant-..."     # or OPENROUTER_API_KEY / OLLAMA_API_KEY
-vcode                                      # run it in any folder
-```
+That's it. On first launch vcode asks you to **pick a provider and paste an API
+key** right in the terminal (saved locally to `~/.vanta-code/config.json`) — no
+`export` needed. Change it anytime with **`/provider`** or **`/key`**. Prefer env
+vars? You can still set `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` /
+`OLLAMA_API_KEY` and vcode will use them.
 
 > For the **Run** features (`run_vanta` / `run_app`) you need the `vanta` CLI:
 > `vanbrew install vanta`. Everything else works without it.
@@ -50,8 +45,7 @@ pkg update -y && pkg install -y python
 curl -fsSL https://raw.githubusercontent.com/Juanshep1/vanbrew/main/install.sh | sh
 . ~/.bashrc 2>/dev/null ; . ~/.profile 2>/dev/null
 vanbrew install vanta vcode
-export OPENROUTER_API_KEY="sk-or-..."     # or ANTHROPIC_API_KEY / OLLAMA_API_KEY
-vcode
+vcode                                     # it'll prompt you for an API key
 ```
 
 ### iPhone / iPad — [iSH](https://apps.apple.com/app/ish-shell/id1436902243)
@@ -61,8 +55,7 @@ apk update && apk add python3 curl
 curl -fsSL https://raw.githubusercontent.com/Juanshep1/vanbrew/main/install.sh | sh
 . ~/.profile
 vanbrew install vanta vcode
-export OPENROUTER_API_KEY="sk-or-..."
-vcode
+vcode                                     # it'll prompt you for an API key
 ```
 
 ### Any terminal with Python (fallback — also works in a-Shell on iOS)
