@@ -1,0 +1,127 @@
+```
+██╗   ██╗ █████╗ ███╗   ██╗████████╗ █████╗
+██║   ██║██╔══██╗████╗  ██║╚══██╔══╝██╔══██╗
+██║   ██║███████║██╔██╗ ██║   ██║   ███████║
+╚██╗ ██╔╝██╔══██║██║╚██╗██║   ██║   ██╔══██║
+ ╚████╔╝ ██║  ██║██║ ╚████║   ██║   ██║  ██║
+  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝   c o d e
+```
+
+**A Claude Code–style terminal coding agent that speaks [Vanta](https://github.com/Juanshep1/vanta).**
+It reads, writes, edits, runs, and debugs `.va` programs for you from a chat
+prompt — with live diffs, a thinking spinner, themes, and your choice of model.
+On launch the wordmark is swept by a "vantablack dusk" gradient (indigo → violet
+→ magenta → coral → amber).
+
+---
+
+## Install
+
+**One-liner:**
+```sh
+curl -fsSL https://raw.githubusercontent.com/Juanshep1/vcode/main/install.sh | sh
+```
+
+**Or via [Vanbrew](https://github.com/Juanshep1/vanbrew):**
+```sh
+vanbrew install vcode
+```
+
+Then bring a key and run it:
+```sh
+export ANTHROPIC_API_KEY="sk-ant-..."     # or OPENROUTER_API_KEY / OLLAMA_API_KEY
+vcode                                      # run it in any folder
+```
+
+> For the **Run** features (`run_vanta` / `run_app`) you need the `vanta` CLI:
+> `vanbrew install vanta`. Everything else works without it.
+
+---
+
+## What it does
+
+```
+╭──────────────────────────────────────────╮
+│ ✻  Welcome to Vanta Code                   │
+╰──────────────────────────────────────────╯
+› build a draggable tip calculator and run it
+
+⏺ I'll write it and pop it open.
+⏺ Write(tipjar.va)
+  ⎿  +38 lines
+⏺ Open app(tipjar.va)
+  ⎿  window opened
+⏺ Done — drag it by the header.
+```
+
+- **Speaks Vanta natively** — its system prompt is a compact, accurate Vanta
+  reference (plain-English syntax, `serve`/`http_get`/filesystem builtins, the
+  `{{ }}` brace rule), so the code it writes actually runs.
+- **Real tools (12)** — `read_file`, `write_file`, **`edit_file`** (surgical
+  find/replace), **`search`** (grep), **`glob`**, `make_dir`, `move_path`,
+  `delete_path`, `run_vanta`, **`run_app`** (pops the app in a movable window),
+  and `bash`. Full filesystem access; writes are frictionless, deletes/shell
+  confirm once.
+- **Live diffs** — every write/edit shows a Claude-Code-style diff (`+` green,
+  `-` red, with line numbers).
+- **Builds from scratch** — ask for an app and it writes fresh `.va` code, makes
+  a folder for it, runs it, and fixes its own errors.
+- **Looks the part** — welcome wordmark, `⏺`/`⎿` tool lines, a thinking spinner,
+  markdown-rendered replies, and a bordered prompt.
+
+## Bring your own key
+
+vcode thinks with an LLM, so it uses **your** API key from the environment —
+nothing is hard-coded or stored on a server:
+
+| Set this | Provider |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | Claude, directly |
+| `OPENROUTER_API_KEY` | OpenRouter (all ~337 models) |
+| `OLLAMA_API_KEY` | Ollama Cloud (full cloud catalog) |
+
+Switch live with **`/provider`**. The **`/model`** picker fetches the provider's
+**full live model list** — just **type to filter** (e.g. `claude`, `qwen`).
+
+## Commands & shortcuts
+
+| | |
+| --- | --- |
+| `/help` | show help |
+| `/provider [name]` | switch Anthropic / OpenRouter / Ollama |
+| `/model [n\|name]` | pick a model (type to filter the full list) |
+| `/themes` | color theme: ember · synthwave · matrix · ice · gold · mono |
+| `/init` | scan the project and write a `VANTA.md` (auto-loaded next time) |
+| `/resume` | reload your last session (or start with `vcode --continue`) |
+| `/compact` | summarize the conversation (also automatic) |
+| `/auto`, `/cwd`, `/clear`, `/exit` | … |
+| **Esc** | interrupt the agent mid-task |
+| `!command` | run a shell command directly |
+| `@path` | inline a file's contents into your message |
+| `"""` | start a multi-line message (end with `"""`) |
+| ↑ / ↓ | recall previous prompts |
+
+## Themes
+
+Six gradient themes, set with `/themes` and remembered across sessions:
+
+`ember` (default) · `synthwave` · `matrix` · `ice` · `gold` · `mono`
+
+## Honest scope
+
+A single self-contained Python file, standard library only. It's a clean,
+line-based REPL styled to look like Claude Code — same banner, tool rendering,
+spinner, diffs and flow — not a full raw-mode TUI, and it doesn't stream tokens
+(replies print when complete). It runs Vanta programs to verify them and pops
+visual/web apps in a movable window.
+
+## Requirements
+
+- **Python 3** (no third-party packages)
+- An API key (above)
+- Optional: the [`vanta`](https://github.com/Juanshep1/vanta) CLI for running
+  programs; **Chrome** for the movable app windows.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

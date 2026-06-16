@@ -1,0 +1,1169 @@
+#!/usr/bin/env python3
+# vanta-code - a terminal coding agent that specializes in the Vanta language,
+# styled to look like Claude Code. Uses YOUR OWN API key (Anthropic or
+# OpenRouter) from the environment. Single file, standard library only.
+from __future__ import print_function
+import os, sys, json, time, threading, subprocess, shutil, tempfile, re, difflib
+import urllib.request, urllib.error
+
+VERSION = "1.5"
+
+# ---------------------------------------------------------------- colours ----
+COLOR = sys.stdout.isatty() and os.environ.get("TERM") not in (None, "", "dumb")
+def _c(s, code):
+    return ("\033[%sm%s\033[0m" % (code, s)) if COLOR else s
+DIM    = "2;37"
+GREY   = "38;2;140;140;150"
+GREEN  = "38;2;126;192;80"
+RED    = "38;2;229;90;90"
+BLUE   = "38;2;120;160;255"
+BOLD   = "1"
+
+# Swappable colour themes: each sets the accent (used everywhere as orange())
+# and the 5-stop wordmark gradient. Change live with /themes.
+THEMES = {
+    "ember":     {"accent": (217, 119, 87),  "grad": [(99,102,241),(168,85,247),(217,70,160),(240,118,92),(245,176,86)]},
+    "synthwave": {"accent": (255, 92, 170),  "grad": [(99,72,255),(173,66,235),(255,72,180),(255,120,96),(255,196,92)]},
+    "matrix":    {"accent": (90, 220, 130),  "grad": [(20,110,55),(46,190,96),(120,236,150),(196,255,205),(80,214,128)]},
+    "ice":       {"accent": (96, 180, 255),  "grad": [(64,96,210),(86,160,255),(128,220,255),(190,242,255),(120,200,255)]},
+    "gold":      {"accent": (240, 184, 84),  "grad": [(120,64,24),(200,120,44),(245,182,84),(255,224,150),(244,176,80)]},
+    "mono":      {"accent": (224, 224, 232), "grad": [(96,96,108),(150,150,162),(208,208,220),(244,244,248),(176,176,190)]},
+}
+THEME = {"name": "ember", "accent": THEMES["ember"]["accent"], "grad": list(THEMES["ember"]["grad"])}
+def set_theme(name):
+    if name not in THEMES: return False
+    THEME["name"] = name
+    THEME["accent"] = THEMES[name]["accent"]
+    THEME["grad"] = list(THEMES[name]["grad"])
+    return True
+
+def _code(rgb): return "38;2;%d;%d;%d" % tuple(rgb)
+def orange(s): return _c(s, _code(THEME["accent"]))   # "orange" = the active theme accent
+def dim(s):    return _c(s, DIM)
+def grey(s):   return _c(s, GREY)
+def green(s):  return _c(s, GREEN)
+def red(s):    return _c(s, RED)
+def blue(s):   return _c(s, BLUE)
+def bold(s):   return _c(s, BOLD)
+
+# ----------------------------------------------------- the VANTA wordmark ----
+# ANSI Shadow block letters, swept by a horizontal "vantablack dusk" gradient.
+VANTA_ART = [
+    "██╗   ██╗ █████╗ ███╗   ██╗████████╗ █████╗ ",
+    "██║   ██║██╔══██╗████╗  ██║╚══██╔══╝██╔══██╗",
+    "██║   ██║███████║██╔██╗ ██║   ██║   ███████║",
+    "╚██╗ ██╔╝██╔══██║██║╚██╗██║   ██║   ██╔══██║",
+    " ╚████╔╝ ██║  ██║██║ ╚████║   ██║   ██║  ██║",
+    "  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝",
+]
+def _lerp(a, b, t): return tuple(int(a[k] + (b[k] - a[k]) * t) for k in range(3))
+def _at(stops, t):
+    if t <= 0: return stops[0]
+    if t >= 1: return stops[-1]
+    seg = t * (len(stops) - 1); i = int(seg); return _lerp(stops[i], stops[i + 1], seg - i)
+def _grad_at(t): return _at(THEME["grad"], t)
+def grad_line(line):
+    if not COLOR: return line
+    n = max(1, len(line) - 1); out = []; last = None
+    for i, ch in enumerate(line):
+        if ch == " ": out.append(ch); last = None; continue
+        code = "\033[38;2;%d;%d;%dm" % _grad_at(i / float(n))
+        if code != last: out.append(code); last = code
+        out.append(ch)
+    out.append("\033[0m"); return "".join(out)
+
+def term_width():
+    try: return min(shutil.get_terminal_size().columns, 90)
+    except Exception: return 80
+
+# --------------------------------------------------------------- spinner -----
+SPIN_WORDS = ["Thinking", "Cogitating", "Noodling", "Percolating", "Vibing",
+              "Brewing", "Schlepping", "Pondering", "Conjuring", "Compiling thoughts"]
+BRAILLE = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+class Spinner(object):
+    def __init__(self, word):
+        self.word = word; self._stop = False; self._t = None; self.t0 = time.time()
+    def start(self):
+        if not COLOR: return self
+        self._t = threading.Thread(target=self._run); self._t.daemon = True; self._t.start(); return self
+    def _run(self):
+        i = 0
+        while not self._stop:
+            el = int(time.time() - self.t0)
+            frame = BRAILLE[i % len(BRAILLE)]
+            line = "%s %s%s %s" % (orange(frame), orange(self.word + "…"),
+                                   dim(" (%ss" % el), dim("· esc to interrupt)"))
+            sys.stdout.write("\r\033[K" + line); sys.stdout.flush()
+            time.sleep(0.08); i += 1
+    def stop(self):
+        self._stop = True
+        if self._t: self._t.join(timeout=0.3)
+        if COLOR: sys.stdout.write("\r\033[K"); sys.stdout.flush()
+
+# ------------------------------------------------------------ vanta knowledge -
+SYSTEM = """You are Vanta Code, a focused terminal coding agent that specializes in the Vanta programming language. You help the user read, write, run, and debug Vanta (.va) programs. Be concise and direct, like a senior pair-programmer in a terminal. Prefer doing over explaining: use your tools to read files, write code, and run it to verify.
+
+# Vanta in a nutshell (it reads like plain English)
+- Output: `say <expr>`. Strings join with `+`. Numbers -> text with `text(x)`; text -> number with `number(s)`.
+- Variables: `let x be <expr>` to create, `change x to <expr>` to reassign.
+- Functions: `to greet(name)` ... `end`, return a value with `give back <expr>`. Call as `greet("Sam")`.
+- Conditionals: `if <cond>` / `otherwise if <cond>` / `otherwise` / `end`. Comparisons in words: `is`, `is not`, `is at least`, `is at most`, `is over`, `is under`. Combine with `and`, `or`, `not`. Membership/substring: `x is in y`.
+- Loops: `for each item in <list>` ... `end`; `while <cond>` ... `end`; numeric ranges via `range(a, b)`.
+- Lists: `let xs be []`, `add 3 to xs`, index `xs[0]`, `length(xs)`. Maps: `let m be {"k": 1}`, read `m["k"]`, set `change m at "k" to 2`, `keys(m)`.
+- Strings: `upper`, `lower`, `slice(s, a, b)`, `replace(s, old, new)`, `split(s, sep)`, `join(list, sep)`, `starts_with`, `ends_with`, `length`.
+- String interpolation: `"hi {name}"` inserts the value of name. To put a LITERAL brace in a string, double it: `{{` and `}}` (this matters a LOT when emitting CSS/JS).
+- Web + system builtins: `serve(port, handler)` (handler takes a request map, gives back text or a map {status, body, type, headers}); `http_get(url[, headers])` and `http_post(url, body[, headers])` -> {status, body, headers}; `read_file`/`write_file`/`append_file`/`list_dir`/`make_dir`/`remove_path`; `from_json`/`to_json`; `run(cmd)` and `shell(cmd)`; `open_url(url)`; `home_dir()`, `path_join(...)`, `dirname`, `basename`; `now()`, `today()`, `clock()`; `run_vanta(code)` runs Vanta source in-process; `ask(prompt)` reads a line of input; `os_name()`.
+- Every block (`if`, `for each`, `while`, `to`) closes with `end`. There are no curly-brace code blocks and no semicolons. `times` is reserved - don't use it as a variable.
+
+# How to work
+- You have FULL ACCESS to this computer. You can create folders ANYWHERE (make_dir), read/write/move/delete any file, and run any shell command (bash). You are NOT limited to the current directory - use absolute paths (e.g. ~/projects/foo/app.va, /Users/.../). Coding Vanta works in any location.
+- Your main job is BUILDING FROM SCRATCH. When the user asks you to make / build / create / write / code an app or program, WRITE it yourself with write_file - produce complete, original, working Vanta code. Do NOT reuse, copy, or just run a file that already exists, and do NOT go hunting for an existing .va to run. "Make a tip calculator" means write brand-new .va code for one - never run ~/tipjar.va or anything pre-made unless the user EXPLICITLY says "run the existing X".
+- For a new project, MAKE A DEDICATED FOLDER for it (make_dir, e.g. ~/vanta/<name>/) and put the .va plus any assets inside, unless the user says where. Then launch it so the user sees it: a visual/web app -> run_app (pops a movable window); a plain script -> run_vanta (console output). Read any error, fix the .va, and re-run until it works.
+- Only use run_app/run_vanta on an EXISTING file when the user explicitly says "run/open <that file>". Otherwise you are creating, not fetching.
+- To CHANGE an existing file, use edit_file (replace exact 'old' text with 'new') — it is surgical and shows a clean diff. Use write_file only for brand-new files or full rewrites. Use search (grep contents) and glob (find files by name) to locate code before editing.
+- Keep answers tight: a sentence on what you built, then the result. You may use light markdown (**bold**, `code`, # headings, ```fenced``` blocks); it renders in the terminal.
+
+# Building a visual app in Vanta (write this from scratch)
+A Vanta GUI/web app builds an HTML page as a string, writes it to a file, and opens it. CRITICAL: in Vanta strings a single { } means interpolation, so write `{{` and `}}` for every literal brace in CSS/JS. Use single quotes for all HTML attributes so you never escape double quotes. Working skeleton (a draggable card) - adapt the UI and logic to whatever the user asked for:
+
+let html be "<!doctype html><html><head><meta charset='utf-8'><style>"
+change html to html + "body{{margin:0;height:100vh;font-family:system-ui;background:#0b1020;color:#eef}}"
+change html to html + ".card{{position:fixed;left:120px;top:120px;width:300px;padding:22px;border-radius:18px;background:#182038;box-shadow:0 20px 60px rgba(0,0,0,.5)}}"
+change html to html + ".bar{{cursor:grab;font-weight:700;margin-bottom:14px}}"
+change html to html + "</style></head><body>"
+change html to html + "<div class='card' id='card'><div class='bar' id='bar'>My App</div><div id='body'>build the UI here</div></div>"
+change html to html + "<script>"
+change html to html + "var card=document.getElementById('card'),bar=document.getElementById('bar');"
+change html to html + "bar.addEventListener('mousedown',function(e){{var sx=e.clientX,sy=e.clientY,ox=card.offsetLeft,oy=card.offsetTop;function mv(ev){{card.style.left=(ox+ev.clientX-sx)+'px';card.style.top=(oy+ev.clientY-sy)+'px';}}function up(){{document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);}}document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);}});"
+change html to html + "</script></body></html>"
+let dest be path_join(home_dir(), "myapp.html")
+write_file(dest, html)
+open_url("file://" + dest)
+say "opened"
+
+Put real inputs/buttons in <div id='body'> and their logic in the <script> (use `{{`/`}}` for braces).
+
+PREFER this file pattern (write HTML -> open_url) for visual apps: it has NO port and never clashes with anything. Use serve() ONLY when you truly need a live backend, and then pick an UNCOMMON HIGH PORT like 8765 - NEVER 8080, 8090, or 8100 (the user already runs apps there, e.g. a conlang site on 8080; opening those shows the wrong app). If run_app says a port is busy, change to another free high port and run_app again."""
+
+_CTX = {"text": ""}   # project context (VANTA.md / AGENTS.md / CLAUDE.md), loaded at startup
+USAGE = {"ctx": 0, "out": 0}   # last input (context) tokens + cumulative output tokens
+
+def _human(n):
+    return ("%.1fk" % (n / 1000.0)) if n >= 1000 else str(int(n))
+
+def session_path(): return os.path.expanduser("~/.vanta-code/last_session.json")
+def save_session(history):
+    try:
+        os.makedirs(os.path.dirname(session_path()), exist_ok=True)
+        json.dump(history, open(session_path(), "w"))
+    except Exception: pass
+def load_session():
+    try: return json.load(open(session_path()))
+    except Exception: return None
+def load_project_context():
+    chunks = []
+    for nm in ("VANTA.md", "AGENTS.md", "CLAUDE.md"):
+        for base in (os.getcwd(), os.path.expanduser("~/.vanta-code")):
+            fp = os.path.join(base, nm)
+            if os.path.isfile(fp):
+                try: chunks.append("# Project context (%s)\n%s" % (nm, open(fp, "r", errors="replace").read()[:6000]))
+                except Exception: pass
+                break
+    return ("\n\n" + "\n\n".join(chunks)) if chunks else ""
+
+# ------------------------------------------------------------------- tools ---
+TOOLS = [
+    {"name": "read_file", "description": "Read a UTF-8 text file and return its contents.",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    {"name": "write_file", "description": "Write (create or overwrite) a whole text file. Use for new files or full rewrites.",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
+    {"name": "edit_file", "description": "Make a surgical edit to an existing file: replace the exact text 'old' with 'new' (old must appear exactly once). Prefer this over write_file for small changes.",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}}, "required": ["path", "old", "new"]}},
+    {"name": "search", "description": "Search file contents for a regex/text pattern (like grep). Returns file:line:match.",
+     "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]}},
+    {"name": "glob", "description": "Find files by name pattern (e.g. *.va) under a directory.",
+     "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]}},
+    {"name": "list_files", "description": "List files in a directory (defaults to the current directory). Pass any absolute path to look anywhere on the computer.",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}},
+    {"name": "make_dir", "description": "Create a folder (and any parent folders) anywhere on the computer. Use absolute paths like ~/projects/myapp or /Users/.../foo.",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    {"name": "move_path", "description": "Move or rename a file/folder.",
+     "input_schema": {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}}, "required": ["from", "to"]}},
+    {"name": "delete_path", "description": "Delete a file or folder (recursively). Asks the user to confirm.",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    {"name": "run_vanta", "description": "Run a Vanta .va file and return its TEXT/console output. Use only for non-visual scripts. Do NOT use on serve() web apps (they run forever) or visual apps (use run_app instead).",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    {"name": "run_app", "description": "Run a Vanta PROJECT and pop up its window. Use this whenever the user wants to run / open / launch / show / see a Vanta app (web apps, the tip calculator, any visual program). Web pages open in a movable, draggable app-window; serve() apps are launched and opened at their port. This is the right tool for 'run the tip calculator'.",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    {"name": "bash", "description": "Run a shell command and return stdout/stderr.",
+     "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
+]
+
+def find_vanta():
+    for p in [shutil.which("vanta"), os.path.expanduser("~/.vanbrew/bin/vanta")]:
+        if p and os.path.exists(p): return p
+    return None
+
+AUTO = {"on": False}  # session auto-approve toggle
+
+def _confirm(action):
+    if AUTO["on"]: return True
+    try:
+        sys.stdout.write("  %s %s " % (orange("Proceed?"), dim("(y / N / a=always)")))
+        sys.stdout.flush()
+        ans = sys.stdin.readline().strip().lower()
+    except Exception:
+        return False
+    if ans == "a": AUTO["on"] = True; return True
+    return ans in ("y", "yes")
+
+def tool_read_file(a):
+    p = os.path.expanduser(a["path"])
+    with open(p, "r") as f: txt = f.read()
+    if len(txt) > 60000: txt = txt[:60000] + "\n... (truncated)"
+    return txt, "%d lines" % (txt.count("\n") + 1)
+
+def _gutter(c, n, sign):
+    label = ("%4d %s " % (n, sign)) if n else ("     %s " % sign)
+    return c(label)
+
+def print_diff(old, new):
+    new_lines = new.splitlines()
+    if not old:                                   # brand-new file: all additions
+        print("  " + dim("⎿  ") + green("+%d lines" % len(new_lines)))
+        for i, ln in enumerate(new_lines[:26], 1):
+            print("     " + _gutter(green, i, "+") + green(ln[:96]))
+        if len(new_lines) > 26: print("     " + dim("… +%d more lines" % (len(new_lines) - 26)))
+        return
+    diff = list(difflib.unified_diff(old.splitlines(), new_lines, n=2, lineterm=""))
+    added = sum(1 for l in diff if l[:1] == "+" and not l.startswith("+++"))
+    removed = sum(1 for l in diff if l[:1] == "-" and not l.startswith("---"))
+    if added == 0 and removed == 0:
+        print("  " + dim("⎿  no changes")); return
+    print("  " + dim("⎿  ") + green("+%d" % added) + dim("  ") + red("-%d" % removed))
+    shown = 0; nl = 0
+    for l in diff:
+        if l.startswith("+++") or l.startswith("---"): continue
+        if l.startswith("@@"):
+            m = re.search(r"\+(\d+)", l); nl = int(m.group(1)) if m else nl
+            if shown: print("     " + dim("┄┄┄"))
+            continue
+        if shown >= 44:
+            print("     " + dim("… more changes")); break
+        if l[:1] == "+":
+            print("     " + _gutter(green, nl, "+") + green(l[1:][:96])); nl += 1; shown += 1
+        elif l[:1] == "-":
+            print("     " + _gutter(red, 0, "-") + red(l[1:][:96])); shown += 1
+        else:
+            print("     " + _gutter(dim, nl, " ") + dim(l[1:][:96])); nl += 1
+
+def tool_write_file(a):
+    p = os.path.expanduser(a["path"]); content = a.get("content", "")
+    old = ""
+    if os.path.exists(p):
+        try: old = open(p).read()
+        except Exception: old = ""
+    d = os.path.dirname(p)
+    if d and not os.path.isdir(d): os.makedirs(d)
+    with open(p, "w") as f: f.write(content)
+    print_diff(old, content)
+    return ("Wrote %s" % p, None)   # None summary: print_diff already drew the ⎿ line
+
+def tool_make_dir(a):
+    p = os.path.expanduser(a["path"])
+    os.makedirs(p, exist_ok=True)
+    return "Created folder %s" % p, "ok"
+
+def tool_move_path(a):
+    src = os.path.expanduser(a["from"]); dst = os.path.expanduser(a["to"])
+    d = os.path.dirname(dst)
+    if d and not os.path.isdir(d): os.makedirs(d)
+    shutil.move(src, dst)
+    return "Moved %s -> %s" % (src, dst), "ok"
+
+def tool_delete_path(a):
+    p = os.path.expanduser(a["path"])
+    print("  " + dim("delete " + p))
+    if not _confirm("delete"):
+        return "User declined to delete this.", "declined"
+    if os.path.isdir(p): shutil.rmtree(p)
+    elif os.path.exists(p): os.remove(p)
+    else: return "nothing at " + p, "missing"
+    return "Deleted %s" % p, "ok"
+
+def tool_edit_file(a):
+    p = os.path.expanduser(a["path"]); old = a.get("old", ""); new = a.get("new", "")
+    if not os.path.exists(p): return "no such file: " + p, "missing"
+    content = open(p).read()
+    if old == "" or old not in content:
+        return "could not find that exact text in %s — copy it verbatim including indentation" % p, "no match"
+    cnt = content.count(old)
+    if cnt > 1:
+        return "that text appears %d times in %s — include more surrounding lines so it is unique" % (cnt, p), "ambiguous"
+    updated = content.replace(old, new, 1)
+    with open(p, "w") as f: f.write(updated)
+    print_diff(content, updated)
+    return ("Edited %s" % p, None)
+
+def _py_grep(pat, root):
+    try: rx = re.compile(pat)
+    except Exception: rx = re.compile(re.escape(pat))
+    hits = []
+    for dp, dn, fn in os.walk(root):
+        dn[:] = [d for d in dn if d not in (".git", "node_modules", "__pycache__", ".vanbrew")]
+        for f in fn:
+            fp = os.path.join(dp, f)
+            try:
+                for i, ln in enumerate(open(fp, "r", errors="replace"), 1):
+                    if rx.search(ln):
+                        hits.append("%s:%d:%s" % (fp, i, ln.rstrip()[:200]))
+                        if len(hits) >= 200: return hits
+            except Exception:
+                continue
+    return hits
+
+def tool_search(a):
+    pat = a["pattern"]; root = os.path.expanduser(a.get("path", "."))
+    rg = shutil.which("rg")
+    if rg:
+        try:
+            r = subprocess.run([rg, "-n", "--no-heading", "-S", "-m", "200", pat, root],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
+            lines = r.stdout.decode("utf-8", "replace").splitlines()
+        except Exception:
+            lines = _py_grep(pat, root)
+    else:
+        lines = _py_grep(pat, root)
+    if not lines: return "no matches for %r" % pat, "0 matches"
+    body = "\n".join(lines[:80])
+    if len(lines) > 80: body += "\n… %d more matches" % (len(lines) - 80)
+    return body, "%d matches" % len(lines)
+
+def tool_glob(a):
+    import fnmatch
+    pat = a["pattern"]; root = os.path.expanduser(a.get("path", "."))
+    out = []
+    for dp, dn, fn in os.walk(root):
+        dn[:] = [d for d in dn if d not in (".git", "node_modules", "__pycache__", ".vanbrew")]
+        for f in fn:
+            if fnmatch.fnmatch(f, pat):
+                out.append(os.path.join(dp, f))
+        if len(out) >= 300: break
+    return ("\n".join(out) if out else "no files match %r" % pat), "%d files" % len(out)
+
+def tool_list_files(a):
+    p = os.path.expanduser(a.get("path", "."))
+    items = sorted(os.listdir(p))
+    out = "\n".join(("%s/" % i if os.path.isdir(os.path.join(p, i)) else i) for i in items)
+    return out or "(empty)", "%d items" % len(items)
+
+def tool_run_vanta(a):
+    p = os.path.expanduser(a["path"]); v = find_vanta()
+    if not v: return "vanta CLI not found. Install it with: vanbrew install vanta", "no vanta"
+    try:
+        r = subprocess.run([v, p], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+        out = r.stdout.decode("utf-8", "replace")
+        return out or "(no output)", "exit %d" % r.returncode
+    except subprocess.TimeoutExpired:
+        return "(timed out after 30s - likely a serve()/loop program; run it yourself: vanta %s)" % p, "timeout"
+
+def tool_bash(a):
+    cmd = a["command"]
+    print("  " + dim("$ " + cmd))
+    if not _confirm("bash"):
+        return "User declined to run this command.", "declined"
+    try:
+        r = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        out = r.stdout.decode("utf-8", "replace")
+        if len(out) > 20000: out = out[:20000] + "\n... (truncated)"
+        return out or "(no output)", "exit %d" % r.returncode
+    except subprocess.TimeoutExpired:
+        return "(timed out after 60s)", "timeout"
+
+def find_chrome():
+    for p in ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+              shutil.which("google-chrome"), shutil.which("chromium"), shutil.which("chrome")]:
+        if p and os.path.exists(p): return p
+    return None
+
+def _child_port(pid):
+    # the TCP port THIS process is actually listening on (so we never open a
+    # port some OTHER app already owns, e.g. a conlang already on 8080)
+    try:
+        out = subprocess.run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", str(pid)],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=4).stdout.decode("utf-8", "replace")
+        m = re.search(r":(\d+)\s*\(LISTEN\)", out)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+def tool_run_app(a):
+    path = os.path.expanduser(a["path"])
+    if not os.path.exists(path): return "no such file: " + path, "missing"
+    v = find_vanta()
+    if not v: return "vanta CLI not found — run: vanbrew install vanta", "no vanta"
+    try: src = open(path).read()
+    except Exception as e: return "could not read %s: %s" % (path, e), "error"
+    chrome = find_chrome()
+    if "serve(" in src:   # a web server: launch it, open ITS port in a movable window
+        proc = subprocess.Popen([v, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        port = None
+        for _ in range(14):                 # wait up to ~5s for it to bind
+            time.sleep(0.35)
+            port = _child_port(proc.pid)
+            if port: break
+            if proc.poll() is not None: break  # it exited (likely a port clash)
+        if not port:
+            m = re.search(r"serve\(\s*(\d{2,5})", src) or re.search(r"PORT\s+be\s+(\d{2,5})", src)
+            sp = m.group(1) if m else None
+            if sp and sp in ("8080", "8090", "8100"):
+                return ("%s did not start — port %s is already taken by another app (the user runs one there). Rewrite it to serve on a free high port like 8765, then run_app again." % (os.path.basename(path), sp)), "port busy"
+            return ("%s did not start a server (no listening port). Check it serves on a free port and try again." % os.path.basename(path)), "no port"
+        url = "http://localhost:%s/" % port
+        if chrome:
+            subprocess.Popen([chrome, "--app=" + url, "--window-size=980,720"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return "Launched %s — serving %s in a movable window." % (os.path.basename(path), url), "window " + url
+        return "Launched %s — serving %s (open it in Chrome)." % (os.path.basename(path), url), url
+    # otherwise it writes a page and opens it: force a movable chromeless app-window
+    env = dict(os.environ)
+    if chrome: env["BROWSER"] = '"%s" --app=%%s' % chrome
+    try:
+        r = subprocess.run([v, path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=25, env=env)
+        out = r.stdout.decode("utf-8", "replace")
+        return (out or "(ran — its window should pop up)"), "window opened"
+    except subprocess.TimeoutExpired:
+        return "(still running after 25s — if it serves, it's up; open it in Chrome)", "running"
+
+DISPATCH = {"read_file": tool_read_file, "write_file": tool_write_file,
+            "edit_file": tool_edit_file, "search": tool_search, "glob": tool_glob,
+            "list_files": tool_list_files, "make_dir": tool_make_dir,
+            "move_path": tool_move_path, "delete_path": tool_delete_path,
+            "run_vanta": tool_run_vanta, "run_app": tool_run_app, "bash": tool_bash}
+
+def tool_label(name, a):
+    if name == "read_file":  return "Read(%s)" % a.get("path", "")
+    if name == "write_file":
+        return ("Update(%s)" if os.path.exists(os.path.expanduser(a.get("path", ""))) else "Write(%s)") % a.get("path", "")
+    if name == "edit_file":  return "Edit(%s)" % a.get("path", "")
+    if name == "search":     return "Search(%s)" % a.get("pattern", "")
+    if name == "glob":       return "Glob(%s)" % a.get("pattern", "")
+    if name == "list_files": return "List(%s)" % a.get("path", ".")
+    if name == "make_dir":   return "Mkdir(%s)" % a.get("path", "")
+    if name == "move_path":  return "Move(%s -> %s)" % (a.get("from", ""), a.get("to", ""))
+    if name == "delete_path":return "Delete(%s)" % a.get("path", "")
+    if name == "run_vanta":  return "Run(%s)" % a.get("path", "")
+    if name == "run_app":    return "Open app(%s)" % a.get("path", "")
+    if name == "bash":       return "Bash(%s)" % a.get("command", "")[:50]
+    return "%s(%s)" % (name, a)
+
+def run_tool(name, a):
+    print(orange("⏺ ") + bold(tool_label(name, a)))
+    try:
+        result, summary = DISPATCH[name](a)
+    except Exception as e:
+        result, summary = ("Error: %s" % e), "error"
+    if summary is not None:          # tools that drew their own ⎿ (diffs) return None
+        print("  " + dim("⎿  " + summary))
+    return result
+
+# --------------------------------------------------------------- LLM client --
+def http_json(url, payload, headers, timeout=120):
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        raise RuntimeError("API error %s: %s" % (e.code, body[:500]))
+    except urllib.error.URLError as e:
+        raise RuntimeError("could not reach the API: %s" % getattr(e, "reason", e))
+
+def to_openai_msgs(history):
+    out = []
+    for m in history:
+        if isinstance(m["content"], str):
+            out.append({"role": m["role"], "content": m["content"]}); continue
+        if m["role"] == "assistant":
+            text = ""; calls = []
+            for b in m["content"]:
+                if b["type"] == "text": text += b["text"]
+                elif b["type"] == "tool_use":
+                    calls.append({"id": b["id"], "type": "function",
+                                  "function": {"name": b["name"], "arguments": json.dumps(b["input"])}})
+            msg = {"role": "assistant", "content": text or None}
+            if calls: msg["tool_calls"] = calls
+            out.append(msg)
+        else:  # user with tool_result blocks
+            for b in m["content"]:
+                if b["type"] == "tool_result":
+                    out.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": b["content"]})
+                elif b["type"] == "text":
+                    out.append({"role": "user", "content": b["text"]})
+    return out
+
+def call_llm(cfg, history):
+    """Return a normalized assistant message: {content:[blocks], stop:'tool'|'end'}."""
+    if cfg["kind"] == "anthropic":
+        payload = {"model": cfg["model"], "max_tokens": 4096, "system": SYSTEM + _CTX["text"],
+                   "messages": history, "tools": TOOLS}
+        headers = {"x-api-key": cfg["key"], "anthropic-version": "2023-06-01",
+                   "content-type": "application/json"}
+        j = http_json("https://api.anthropic.com/v1/messages", payload, headers)
+        u = j.get("usage", {}) or {}
+        USAGE["ctx"] = u.get("input_tokens", USAGE["ctx"]); USAGE["out"] += u.get("output_tokens", 0)
+        blocks = j.get("content", [])
+        stop = "tool" if j.get("stop_reason") == "tool_use" else "end"
+        return {"content": blocks, "stop": stop}
+    else:  # openai-compatible (openrouter)
+        oai_tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
+                      "parameters": t["input_schema"]}} for t in TOOLS]
+        msgs = [{"role": "system", "content": SYSTEM + _CTX["text"]}] + to_openai_msgs(history)
+        payload = {"model": cfg["model"], "max_tokens": 4096, "messages": msgs,
+                   "tools": oai_tools, "tool_choice": "auto"}
+        headers = {"Authorization": "Bearer " + cfg["key"], "content-type": "application/json",
+                   "HTTP-Referer": "https://github.com/Juanshep1/vanbrew", "X-Title": "Vanta Code"}
+        j = http_json(cfg["base"] + "/chat/completions", payload, headers)
+        u = j.get("usage", {}) or {}
+        USAGE["ctx"] = u.get("prompt_tokens", USAGE["ctx"]); USAGE["out"] += u.get("completion_tokens", 0)
+        m = j["choices"][0]["message"]
+        blocks = []
+        if m.get("content"): blocks.append({"type": "text", "text": m["content"]})
+        for tc in (m.get("tool_calls") or []):
+            try: inp = json.loads(tc["function"]["arguments"] or "{}")
+            except Exception: inp = {}
+            blocks.append({"type": "tool_use", "id": tc["id"], "name": tc["function"]["name"], "input": inp})
+        stop = "tool" if (m.get("tool_calls")) else "end"
+        return {"content": blocks, "stop": stop}
+
+# ----------------------------------------------------------------- agent -----
+def wrap(text, width):
+    out = []
+    for para in text.split("\n"):
+        if not para: out.append(""); continue
+        line = ""
+        for word in para.split(" "):
+            if line and len(line) + 1 + len(word) > width:
+                out.append(line); line = word
+            else:
+                line = (line + " " + word) if line else word
+        out.append(line)
+    return "\n".join(out)
+
+def _md_inline(s):
+    if not COLOR: return s
+    s = re.sub(r"`([^`]+)`", lambda m: orange(m.group(1)), s)        # `code`
+    s = re.sub(r"\*\*([^*]+)\*\*", lambda m: bold(m.group(1)), s)     # **bold**
+    return s
+
+def print_assistant(text):
+    rendered = []
+    fence = False
+    for raw in text.strip().split("\n"):
+        st = raw.strip()
+        if st.startswith("```"):
+            fence = not fence
+            rendered.append(dim("  " + "┄" * 24)); continue
+        if fence:
+            rendered.append(grey("  │ " + raw)); continue
+        h = re.match(r"^(#{1,6})\s+(.*)", raw)
+        if h: rendered.append(bold(orange(h.group(2)))); continue
+        b = re.match(r"^(\s*)[-*]\s+(.*)", raw)
+        if b: rendered.append(b.group(1) + orange("•") + " " + _md_inline(b.group(2))); continue
+        rendered.append(_md_inline(raw))
+    first = True
+    for ln in rendered:
+        if first and ln.strip():
+            print(orange("⏺ ") + ln); first = False
+        else:
+            print("  " + ln)
+
+COMPACT_AT = 60000   # auto-summarise the history once it grows past ~this many chars
+
+def history_size(history):
+    try: return sum(len(json.dumps(m.get("content", ""))) for m in history)
+    except Exception: return 0
+
+def _transcript(history):
+    lines = []
+    for m in history:
+        c = m.get("content")
+        if isinstance(c, str):
+            lines.append("%s: %s" % (m["role"], c)); continue
+        for b in (c or []):
+            t = b.get("type")
+            if t == "text": lines.append("%s: %s" % (m["role"], b.get("text", "")))
+            elif t == "tool_use": lines.append("assistant -> %s(%s)" % (b.get("name"), json.dumps(b.get("input", {}))[:200]))
+            elif t == "tool_result": lines.append("tool result: %s" % (str(b.get("content", ""))[:300]))
+    return "\n".join(lines)
+
+def compact_history(cfg, history):
+    if not history: return history
+    ask = [{"role": "user", "content":
+            "Summarize this coding session concisely for your own future reference. "
+            "Preserve: what the user is building, exact file paths you created/edited, key decisions, "
+            "the current state, and anything still unresolved. A few tight bullet points.\n\n"
+            "=== TRANSCRIPT ===\n" + _transcript(history)}]
+    sys.stdout.write("  " + dim("compacting the conversation to save context…")); sys.stdout.flush()
+    try:
+        resp = call_llm(cfg, ask)
+        text = "".join(b.get("text", "") for b in resp["content"] if b.get("type") == "text").strip()
+    except Exception:
+        sys.stdout.write("\r\033[K"); return history
+    sys.stdout.write("\r\033[K")
+    if not text: return history
+    print("  " + dim("↻ compacted earlier conversation to save context"))
+    return [{"role": "user", "content": "[Summary of our earlier conversation]\n" + text}]
+
+class EscWatch(object):
+    """Watches stdin for Esc during a turn (in raw, no-echo mode) and sets a flag."""
+    def __init__(self): self.stop = False; self.aborted = False; self.t = None; self.fd = None; self.old = None
+    def start(self):
+        if not sys.stdin.isatty(): return self
+        try:
+            import termios
+            self.fd = sys.stdin.fileno(); self.old = termios.tcgetattr(self.fd)
+            nw = termios.tcgetattr(self.fd); nw[3] = nw[3] & ~(termios.ICANON | termios.ECHO)
+            termios.tcsetattr(self.fd, termios.TCSANOW, nw)
+        except Exception:
+            self.old = None; return self
+        def run():
+            import select
+            while not self.stop:
+                try:
+                    r, _, _ = select.select([self.fd], [], [], 0.1)
+                    if r and os.read(self.fd, 1) == b"\x1b": self.aborted = True
+                except Exception:
+                    break
+        self.t = threading.Thread(target=run); self.t.daemon = True; self.t.start(); return self
+    def done(self):
+        self.stop = True
+        if self.t: self.t.join(0.3)
+        if self.old is not None:
+            try:
+                import termios; termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+            except Exception: pass
+        return self.aborted
+
+def _call_worker(cfg, history, box):
+    try: box["r"] = call_llm(cfg, history)
+    except Exception as e: box["e"] = e
+
+def _ensure_assistant(history):
+    # keep roles alternating after an interrupt so the next call stays valid
+    if history and history[-1].get("role") != "assistant":
+        history.append({"role": "assistant", "content": [{"type": "text", "text": "(interrupted)"}]})
+
+def agent_turn(cfg, history, user_text):
+    if history_size(history) > COMPACT_AT:        # auto-compact long sessions
+        history[:] = compact_history(cfg, history)
+    history.append({"role": "user", "content": user_text})
+    w = EscWatch().start()
+    try:
+        for _ in range(60):
+            sp = Spinner(SPIN_WORDS[int(time.time()) % len(SPIN_WORDS)]).start()
+            box = {}
+            th = threading.Thread(target=_call_worker, args=(cfg, history, box)); th.daemon = True; th.start()
+            while th.is_alive():
+                if w.aborted: break
+                th.join(0.08)
+            sp.stop()
+            if w.aborted:
+                _ensure_assistant(history); print(dim("  ⎚ interrupted (Esc)")); return
+            if "e" in box:
+                print(red("⏺ " + str(box["e"]))); return
+            resp = box.get("r")
+            if not resp: return
+            history.append({"role": "assistant", "content": resp["content"]})
+            results = []
+            for b in resp["content"]:
+                if b["type"] == "text" and b["text"].strip():
+                    print_assistant(b["text"])
+                elif b["type"] == "tool_use":
+                    if w.aborted:
+                        results.append({"type": "tool_result", "tool_use_id": b["id"], "content": "(interrupted)"})
+                    else:
+                        out = run_tool(b["name"], b.get("input", {}))
+                        results.append({"type": "tool_result", "tool_use_id": b["id"], "content": out})
+            tool_uses = any(b["type"] == "tool_use" for b in resp["content"])
+            if tool_uses: history.append({"role": "user", "content": results})
+            if w.aborted:
+                _ensure_assistant(history); print(dim("  ⎚ interrupted (Esc)")); return
+            if resp["stop"] != "tool" or not tool_uses:
+                return
+        print(dim("  (stopped after too many steps)"))
+    finally:
+        w.done()
+
+# ----------------------------------------------------------------- ui --------
+def box(lines, width=None):
+    w = width or term_width()
+    inner = w - 4
+    top = "╭" + "─" * (w - 2) + "╮"
+    bot = "╰" + "─" * (w - 2) + "╯"
+    print(orange(top))
+    for ln in lines:
+        # ln may contain colour codes; pad on visible length is approximate
+        print(orange("│ ") + ln)
+    print(orange(bot))
+
+def banner(cfg):
+    w = max(len(l) for l in VANTA_ART)
+    print()
+    for line in VANTA_ART:
+        print("  " + grad_line(line))
+    print("  " + orange("c o d e") + dim("   ·   the terminal agent that speaks Vanta   ·   v" + VERSION))
+    print("  " + dim("─" * w))
+    dot = green("●") if cfg.get("key") else grey("○")
+    print("  " + dot + "  " + bold(cfg["provider"]) + dim("   ·   ") + cfg["model"])
+    print("  " + dim(os.getcwd()))
+    print()
+    print(dim("  /help for commands   ·   ask me to build something   ·   Ctrl-D to exit"))
+    print()
+
+HELP = """  Commands:
+    /help            show this help
+    /clear           start a fresh conversation
+    /compact         summarize the conversation now (also happens automatically)
+    /resume          reload your previous session (or start with: vcode --continue)
+    /init            scan the project and write a VANTA.md (auto-loaded next time)
+    /themes          pick a color theme (ember, synthwave, matrix, ice, gold, mono)
+    /provider [name] list providers, or switch: anthropic | openrouter | ollama
+    /model [n|name]  list models and pick one (/model 2), or set any id
+    /auto            toggle auto-approve for writes & shell (currently: %s)
+    /cwd <path>      change working directory
+    /exit, /quit     leave
+
+  Shortcuts:
+    Esc              interrupt the agent while it's working
+    \"\"\"              start a multi-line message (end with \"\"\" on its own line)
+    !<command>       run a shell command directly (e.g. !ls, !git status)
+    @path/to/file    inline a file's contents into your message
+    ↑ / ↓            recall previous prompts (history is saved)
+
+  Just type what you want, e.g.:
+    "write a fizzbuzz in vanta and run it"
+    "make a web app that serves a todo list on port 8123"
+    "read snake.va and explain what it does"
+"""
+
+def _rl_prompt():
+    if not COLOR: return "› "
+    # \001..\002 wrap non-printing bytes so readline counts width correctly
+    return "\001\033[%sm\002│ › \001\033[0m\002" % _code(THEME["accent"])
+
+def prompt_input():
+    w = term_width()
+    if USAGE["ctx"]:
+        print(dim("  context ~%s tokens  ·  %s out" % (_human(USAGE["ctx"]), _human(USAGE["out"]))))
+    print(orange("╭" + "─" * (w - 2) + "╮"))
+    line = input(_rl_prompt())            # readline gives up-arrow history + line editing
+    print(orange("╰" + "─" * (w - 2) + "╯"))
+    return line
+
+def expand_mentions(text):
+    # @path/to/file -> inlines the file's contents (like Claude Code's @ mentions)
+    def rep(m):
+        path = m.group(1); fp = os.path.expanduser(path)
+        if os.path.isfile(fp):
+            try: body = open(fp, "r", errors="replace").read()[:20000]
+            except Exception: return m.group(0)
+            return "%s\n\n--- %s ---\n%s\n--- end %s ---" % (path, path, body, path)
+        return m.group(0)
+    return re.sub(r"@([^\s]+)", rep, text)
+
+# ----------------------------------------------------------------- config ----
+PROVIDERS = {
+    "anthropic":  {"kind": "anthropic", "env": "ANTHROPIC_API_KEY",  "base": None,
+                   "model": "claude-sonnet-4-6",        "label": "Anthropic (Claude)"},
+    "openrouter": {"kind": "openai",    "env": "OPENROUTER_API_KEY", "base": "https://openrouter.ai/api/v1",
+                   "model": "anthropic/claude-sonnet-4.5", "label": "OpenRouter"},
+    "ollama":     {"kind": "openai",    "env": "OLLAMA_API_KEY",     "base": "https://ollama.com/v1",
+                   "model": "gpt-oss:120b",             "label": "Ollama Cloud"},
+}
+PROVIDER_ALIASES = {"ollama-cloud": "ollama", "ollamacloud": "ollama", "claude": "anthropic", "or": "openrouter"}
+
+# Fallback model lists for the /model picker. When a key is set, /model fetches
+# the provider's LIVE list from /v1/models (so Ollama shows its full cloud
+# catalog); these are used only if that fetch fails or you're offline.
+MODELS = {
+    "anthropic":  ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+    "openrouter": ["anthropic/claude-sonnet-4.5", "anthropic/claude-opus-4.1", "openai/gpt-4o",
+                   "google/gemini-2.5-pro", "deepseek/deepseek-chat", "qwen/qwen3-coder",
+                   "meta-llama/llama-3.3-70b-instruct"],
+    "ollama":     ["gpt-oss:120b", "gpt-oss:20b", "qwen3-coder:480b", "qwen3-coder-next",
+                   "deepseek-v3.1:671b", "deepseek-v3.2", "deepseek-v4-pro", "deepseek-v4-flash",
+                   "kimi-k2:1t", "kimi-k2-thinking", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code",
+                   "glm-4.6", "glm-4.7", "glm-5", "glm-5.1", "minimax-m2", "minimax-m2.1",
+                   "minimax-m2.5", "minimax-m2.7", "minimax-m3", "qwen3-vl:235b", "qwen3.5:397b",
+                   "qwen3-next:80b", "mistral-large-3:675b", "devstral-2:123b", "devstral-small-2:24b",
+                   "nemotron-3-ultra", "nemotron-3-super", "nemotron-3-nano:30b",
+                   "gemma3:27b", "gemma3:12b", "gemma3:4b", "gemma4:31b", "cogito-2.1:671b",
+                   "ministral-3:14b", "ministral-3:8b", "ministral-3:3b", "gemini-3-flash-preview"],
+}
+
+_MODEL_CACHE = {}
+
+def fetch_models(cfg):
+    """Live model ids from the provider's /v1/models endpoint, or None."""
+    try:
+        if cfg["kind"] == "anthropic":
+            url = "https://api.anthropic.com/v1/models"
+            hdr = {"x-api-key": cfg["key"], "anthropic-version": "2023-06-01"}
+        else:
+            url = cfg["base"] + "/models"
+            hdr = {"Authorization": "Bearer " + cfg["key"]}
+        req = urllib.request.Request(url, headers=hdr)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            j = json.loads(r.read().decode("utf-8", "replace"))
+        data = j.get("data") or j.get("models") or []
+        ids, seen = [], set()
+        for m in data:
+            mid = m.get("id") or m.get("name") or m.get("model")
+            if mid and mid not in seen:
+                seen.add(mid); ids.append(mid)
+        return ids or None
+    except Exception:
+        return None
+
+def provider_models(cfg, refresh=False):
+    prov = cfg["provider"]
+    if not refresh and prov in _MODEL_CACHE:
+        return _MODEL_CACHE[prov]
+    sys.stdout.write("  " + dim("fetching the live model list…")); sys.stdout.flush()
+    live = fetch_models(cfg)
+    sys.stdout.write("\r\033[K"); sys.stdout.flush()
+    models = live if live else MODELS.get(prov, [])   # full live list (type to filter in the picker)
+    _MODEL_CACHE[prov] = models
+    return models
+
+def file_config():
+    p = os.path.expanduser("~/.vanta-code/config.json")
+    if os.path.exists(p):
+        try: return json.load(open(p))
+        except Exception: return {}
+    return {}
+
+def make_cfg(provider, fc=None, use_env_model=True):
+    p = PROVIDERS.get(provider)
+    if not p: return None
+    fc = fc or {}
+    key = os.environ.get(p["env"]) or (fc.get("key", "") if fc.get("provider") == provider else "")
+    if not key: return None
+    model = (os.environ.get("VANTA_CODE_MODEL") if use_env_model else None) \
+            or (fc.get("model") if fc.get("provider") == provider else None) or p["model"]
+    return {"provider": provider, "kind": p["kind"], "key": key,
+            "base": p["base"], "model": model, "label": p["label"]}
+
+def load_config():
+    fc = file_config()
+    prov = fc.get("provider")
+    if not prov:
+        for cand in ("anthropic", "openrouter", "ollama"):
+            if os.environ.get(PROVIDERS[cand]["env"]): prov = cand; break
+    if not prov: return None
+    return make_cfg(prov, fc)
+
+def save_config(updates):
+    path = os.path.expanduser("~/.vanta-code/config.json")
+    d = file_config(); d.update(updates)
+    dirp = os.path.dirname(path)
+    if not os.path.isdir(dirp): os.makedirs(dirp)
+    with open(path, "w") as f: json.dump(d, f, indent=2)
+    try: os.chmod(path, 0o600)
+    except Exception: pass
+
+def _saved_key(provider):
+    fc = file_config()
+    return fc.get("key") if fc.get("provider") == provider else None
+
+# ------------------------------------------------------ arrow-key menu (TTY) --
+def _numbered_pick(title, rows):
+    print(title)
+    for i, r in enumerate(rows): print("  %d. %s" % (i + 1, r))
+    try: n = int(input("  pick a number: ")) - 1
+    except Exception: return None
+    return n if 0 <= n < len(rows) else None
+
+def select_menu(title, rows, idx=0):
+    """Up/Down to move, type to filter, Enter to pick, Esc to cancel. Returns the
+    ORIGINAL index of the chosen row (or None). Handles big lists (337 models)
+    via a scrolling viewport + live substring filter. Falls back to a numbered
+    prompt when there's no real terminal."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return _numbered_pick(title, rows)
+    try:
+        import termios, tty
+    except Exception:
+        return _numbered_pick(title, rows)
+    fd = sys.stdin.fileno()
+    try: old = termios.tcgetattr(fd)
+    except Exception: return _numbered_pick(title, rows)
+    n_all = len(rows)
+    plain = [re.sub(r"\033\[[0-9;]*m", "", r) for r in rows]   # for matching
+    try: height = shutil.get_terminal_size().lines
+    except Exception: height = 24
+    vis = max(4, min(n_all, height - 6))
+    query = [""]; cur = [min(idx, n_all - 1) if n_all else 0]; fil = [list(range(n_all))]; top = [0]
+    def refilter():
+        q = query[0].lower()
+        fil[0] = list(range(n_all)) if not q else [i for i in range(n_all) if q in plain[i].lower()]
+        cur[0] = 0; top[0] = 0
+    print(title)
+    def draw():
+        m = len(fil[0])
+        if cur[0] >= m: cur[0] = max(0, m - 1)
+        if cur[0] < top[0]: top[0] = cur[0]
+        elif cur[0] >= top[0] + vis: top[0] = cur[0] - vis + 1
+        if top[0] > max(0, m - vis): top[0] = max(0, m - vis)
+        if top[0] < 0: top[0] = 0
+        for r in range(vis):
+            mi = top[0] + r
+            if mi < m:
+                row = rows[fil[0][mi]]
+                ptr = orange("❯ ") if mi == cur[0] else "  "
+                sys.stdout.write("\r\033[K" + ptr + (bold(row) if mi == cur[0] else dim(row)) + "\n")
+            else:
+                sys.stdout.write("\r\033[K\n")
+        flt = ("   filter: " + bold(query[0]) + "▏") if query[0] else "   (type to filter)"
+        sys.stdout.write("\r\033[K" + dim("  %d/%d  ↑/↓ Enter · Esc%s" % ((cur[0] + 1) if m else 0, m, flt)) + "\n")
+        sys.stdout.flush()
+    draw()
+    try:
+        nw = termios.tcgetattr(fd)            # raw input: no canonical, no echo, no signals
+        nw[3] = nw[3] & ~(termios.ICANON | termios.ECHO | termios.ISIG)
+        termios.tcsetattr(fd, termios.TCSANOW, nw)
+        while True:
+            b = os.read(fd, 32)                    # may batch several typed chars
+            if not b: continue
+            if b[:1] == b"\x1b":                    # escape sequence or bare Esc
+                if len(b) >= 3 and b[1:2] == b"[":
+                    k = b[2:3]
+                    if k == b"A" and fil[0]: cur[0] = (cur[0] - 1) % len(fil[0])
+                    elif k == b"B" and fil[0]: cur[0] = (cur[0] + 1) % len(fil[0])
+                    else: continue
+                else:
+                    return None                     # bare Esc cancels
+            elif b in (b"\r", b"\n"):
+                return fil[0][cur[0]] if fil[0] else None
+            elif b == b"\x03":
+                return None
+            else:                                   # printable / backspace -> edit the filter
+                changed = False
+                for byte in bytearray(b):
+                    if byte in (8, 127):
+                        if query[0]: query[0] = query[0][:-1]; changed = True
+                    elif 32 <= byte <= 126:
+                        query[0] += chr(byte); changed = True
+                if not changed: continue
+                refilter()
+            sys.stdout.write("\033[%dA" % (vis + 1)); draw()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+def theme_swatch(nm):
+    th = THEMES[nm]
+    if not COLOR: return "%-10s ########" % nm
+    blocks = "".join("\033[%sm█" % _code(_at(th["grad"], k / 7.0)) for k in range(8)) + "\033[0m"
+    return "\033[%sm%-10s\033[0m %s" % (_code(th["accent"]), nm, blocks)
+
+def do_theme_menu(cfg):
+    names = list(THEMES)
+    idx = names.index(THEME["name"]) if THEME["name"] in names else 0
+    sel = select_menu(orange("Choose a theme") + dim("   ↑/↓ then Enter · Esc to cancel"),
+                      [theme_swatch(n) for n in names], idx)
+    if sel is None:
+        print(dim("  (kept " + THEME["name"] + ")")); return
+    set_theme(names[sel]); save_config({"theme": names[sel]})
+    print(); banner(cfg)   # re-show the banner so you see the new colors instantly
+
+def do_provider_menu(cfg):
+    keys = list(PROVIDERS.keys())
+    rows = []
+    for pk in keys:
+        pv = PROVIDERS[pk]
+        has = green("● key set") if (os.environ.get(pv["env"]) or _saved_key(pk)) else grey("○ no key yet")
+        rows.append("%-11s %-20s %s" % (pk, pv["label"], has))
+    idx = keys.index(cfg["provider"]) if cfg.get("provider") in keys else 0
+    sel = select_menu(orange("Choose a provider") + dim("   ↑/↓ then Enter · Esc to cancel"), rows, idx)
+    if sel is None:
+        print(dim("  (cancelled)")); return cfg
+    target = keys[sel]; pv = PROVIDERS[target]
+    if not (os.environ.get(pv["env"]) or _saved_key(target)):
+        import getpass
+        print(dim("  paste your %s and press Enter (input hidden), blank to cancel:" % pv["env"]))
+        try: key = getpass.getpass("  " + orange("key❯ "))
+        except Exception: key = ""
+        if not key.strip():
+            print(dim("  (no key entered)")); return cfg
+        save_config({"provider": target, "key": key.strip(), "model": pv["model"]})
+        print(green("  ✓ saved your %s to ~/.vanta-code/config.json (chmod 600)") % target)
+    else:
+        save_config({"provider": target})
+    nc = make_cfg(target, file_config(), use_env_model=False)
+    if not nc:
+        print(red("  could not load %s" % target)); return cfg
+    print(dim("  provider → " + nc["provider"] + " · " + nc["model"]))
+    return do_model_menu(nc)
+
+def do_model_menu(cfg):
+    models = provider_models(cfg)
+    if not models:
+        print(dim("  no models found for " + cfg["provider"] + " — set one with /model <id>")); return cfg
+    idx = models.index(cfg["model"]) if cfg["model"] in models else 0
+    sel = select_menu(orange("Choose a model") + dim("   (" + cfg["provider"] + ", %d models)  ↑/↓ then Enter" % len(models)), models, idx)
+    if sel is None:
+        print(dim("  (kept " + cfg["model"] + ")")); return cfg
+    cfg["model"] = models[sel]; save_config({"provider": cfg["provider"], "model": cfg["model"]})
+    print(dim("  model → " + cfg["model"]))
+    return cfg
+
+def no_key_screen():
+    print()
+    box([orange("✻ ") + bold("Vanta Code") + dim("  needs an API key")], term_width())
+    print()
+    print("  Vanta Code thinks with an LLM, so it uses " + bold("your own key") + ". Set one of:")
+    print()
+    print("    " + green('export ANTHROPIC_API_KEY="sk-ant-..."') + dim("   # uses Claude directly"))
+    print("    " + green('export OPENROUTER_API_KEY="sk-or-..."') + dim("    # uses OpenRouter"))
+    print("    " + green('export OLLAMA_API_KEY="..."') + dim("              # uses Ollama Cloud"))
+    print()
+    print("  Then run " + bold("vanta-code") + " again, and use " + bold("/provider") + " to switch.")
+    print()
+
+# ------------------------------------------------------------------ main -----
+def main():
+    args = sys.argv[1:]
+    if "--version" in args or "-v" in args:
+        print("vcode " + VERSION); return
+    if "--help" in args or "-h" in args:
+        print("vcode - a terminal coding agent that speaks Vanta.\n")
+        print("  Usage: vcode             start the interactive agent")
+        print("         vcode --continue  resume your last session")
+        print("         vcode --version   print version\n")
+        print("  Needs ANTHROPIC_API_KEY or OPENROUTER_API_KEY in your environment.")
+        return
+
+    cfg = load_config()
+    if not cfg:
+        no_key_screen(); return
+    set_theme(file_config().get("theme", "ember"))   # restore the saved theme
+    _CTX["text"] = load_project_context()             # auto-load VANTA.md/AGENTS.md/CLAUDE.md
+    try:
+        import readline, atexit
+        _hist = os.path.expanduser("~/.vanta-code/history")
+        try: os.makedirs(os.path.dirname(_hist), exist_ok=True)
+        except Exception: pass
+        try: readline.read_history_file(_hist)
+        except Exception: pass
+        readline.set_history_length(1000)
+        def _savehist():
+            try: readline.write_history_file(_hist)
+            except Exception: pass
+        atexit.register(_savehist)
+    except Exception:
+        pass
+
+    banner(cfg)
+    history = []
+    if "--continue" in args or "-c" in args:
+        s = load_session()
+        if s: history[:] = s; print(dim("  ↻ continued previous session (%d messages)\n" % len(s)))
+    while True:
+        try:
+            line = prompt_input().strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n" + dim("  bye.")); return
+        if not line:
+            continue
+        if line == '"""':                              # paste a multi-line block until the next """
+            buf = []
+            while True:
+                try: more = input(dim("  ┃ "))
+                except EOFError: break
+                if more.strip() == '"""': break
+                buf.append(more)
+            block = "\n".join(buf).strip()
+            if not block: continue
+            try: agent_turn(cfg, history, expand_mentions(block))
+            except KeyboardInterrupt: print("\n" + dim("  (interrupted)"))
+            save_session(history); print(); continue
+        if line.startswith("!"):                       # run a shell command directly
+            cmd = line[1:].strip()
+            if cmd:
+                try:
+                    r = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+                    o = r.stdout.decode("utf-8", "replace")
+                    print(o.rstrip() if o.strip() else dim("  (no output)"))
+                    history.append({"role": "user", "content": "I ran `%s`; output:\n%s" % (cmd, o[:4000])})
+                    save_session(history)
+                except Exception as e:
+                    print(red("  " + str(e)))
+            continue
+        if line.startswith("/"):
+            cmd = line[1:].split(" ", 1)
+            name = cmd[0].lower(); rest = cmd[1].strip() if len(cmd) > 1 else ""
+            if name in ("exit", "quit"): print(dim("  bye.")); return
+            elif name == "help": print(HELP % ("on" if AUTO["on"] else "off"))
+            elif name == "clear": history = []; print(dim("  context cleared."))
+            elif name == "compact":
+                if history: history[:] = compact_history(cfg, history)
+                else: print(dim("  nothing to compact yet."))
+            elif name == "init":
+                agent_turn(cfg, history, expand_mentions("Look around this project (use glob/list_files/read_file) and write a short VANTA.md in the current folder: what it is, how to run it, key files, and any Vanta conventions used. Then confirm you created it."))
+                _CTX["text"] = load_project_context()
+            elif name == "resume":
+                s = load_session()
+                if s: history[:] = s; print(dim("  resumed %d messages from your last session." % len(s)))
+                else: print(dim("  no saved session found."))
+            elif name == "auto": AUTO["on"] = not AUTO["on"]; print(dim("  auto-approve %s." % ("on" if AUTO["on"] else "off")))
+            elif name in ("themes", "theme"): do_theme_menu(cfg)
+            elif name == "model":
+                if not rest or rest.lower() == "refresh":
+                    if rest.lower() == "refresh": _MODEL_CACHE.pop(cfg["provider"], None)
+                    cfg = do_model_menu(cfg)
+                else:
+                    models = provider_models(cfg)
+                    if rest.isdigit() and models:
+                        idx = int(rest) - 1
+                        if 0 <= idx < len(models):
+                            cfg["model"] = models[idx]; save_config({"provider": cfg["provider"], "model": cfg["model"]})
+                            print(dim("  model -> " + cfg["model"]))
+                        else:
+                            print(red("  pick 1-%d, or type a model name" % len(models)))
+                    else:
+                        cfg["model"] = rest; save_config({"provider": cfg["provider"], "model": rest}); print(dim("  model -> " + rest))
+            elif name == "provider":
+                if not rest:
+                    cfg = do_provider_menu(cfg)
+                else:
+                    target = PROVIDER_ALIASES.get(rest.lower(), rest.lower())
+                    if target not in PROVIDERS:
+                        print(red("  unknown provider '%s'. options: %s" % (rest, ", ".join(PROVIDERS))))
+                    else:
+                        nc = make_cfg(target, file_config(), use_env_model=False)
+                        if not nc:
+                            print(red("  no key for %s — set %s, or run /provider to paste one" % (target, PROVIDERS[target]["env"])))
+                        else:
+                            cfg = nc; save_config({"provider": target})
+                            print(dim("  provider -> " + cfg["provider"] + " · " + cfg["model"]))
+            elif name == "cwd":
+                if rest:
+                    try: os.chdir(os.path.expanduser(rest)); print(dim("  cwd -> " + os.getcwd()))
+                    except Exception as e: print(red("  " + str(e)))
+                else: print(dim("  cwd: " + os.getcwd()))
+            else: print(dim("  unknown command. /help for the list."))
+            continue
+        try:
+            agent_turn(cfg, history, expand_mentions(line))
+        except KeyboardInterrupt:
+            print("\n" + dim("  (interrupted)"))
+        save_session(history)
+        print()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
