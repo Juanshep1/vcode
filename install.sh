@@ -11,12 +11,19 @@ cat > "$DEST/bin/vcode" <<SH
 exec python3 "$DEST/vcode.py" "\$@"
 SH
 chmod +x "$DEST/bin/vcode"
-# add ~/.vcode/bin to PATH in the shell profile
+# add ~/.vcode/bin to PATH in the shell profile(s)
+ADDED=0
 for RC in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
-  if [ -f "$RC" ] && ! grep -q "/.vcode/bin" "$RC" 2>/dev/null; then
-    printf '\n# >>> vcode >>>\nexport PATH="%s/.vcode/bin:$PATH"\n# <<< vcode <<<\n' "$HOME" >> "$RC"
+  if [ -f "$RC" ]; then
+    if ! grep -q "/.vcode/bin" "$RC" 2>/dev/null; then
+      printf '\n# >>> vcode >>>\nexport PATH="%s/.vcode/bin:$PATH"\n# <<< vcode <<<\n' "$HOME" >> "$RC"
+    fi
+    ADDED=1
   fi
 done
+if [ "$ADDED" = "0" ]; then   # no profile yet - create one
+  printf '\n# >>> vcode >>>\nexport PATH="%s/.vcode/bin:$PATH"\n# <<< vcode <<<\n' "$HOME" >> "$HOME/.profile"
+fi
 echo "==> installed. Restart your terminal (or: export PATH=\"$DEST/bin:\$PATH\")"
 echo "    then set a key:  export ANTHROPIC_API_KEY=...   (or OPENROUTER_API_KEY / OLLAMA_API_KEY)"
 echo "    and run:         vcode"
