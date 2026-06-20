@@ -79,6 +79,19 @@ vcode
 > program and open `http://localhost:<port>` in your phone's browser. iSH is
 > emulated, so it's slower than Termux.
 
+### Phone-keyboard tips
+The terminal UI is mobile-hardened (it survives laggy/split key input and the app
+being backgrounded, uses narrow-screen layout, and ASCII-safe glyphs). To reach
+keys a soft keyboard lacks, use your terminal's **extra-keys row** (Termux shows
+one above the keyboard; Terminus/Termius has an accessory bar) for **Esc, Tab,
+Ctrl, and the arrow keys**.
+
+- **Permission modes:** Shift+Tab cycles them — but if your keyboard can't send it,
+  just run **`/mode`** (cycles default → auto-accept → plan), or `/auto` / `/plan`.
+- **The `/` menu:** press `/`, then **type to filter** and **Enter** to pick — you
+  don't strictly need the arrow keys (use them to disambiguate similar commands).
+- **`@file` completion** works with the Tab key from the extra-keys row.
+
 ---
 
 ## What it does
