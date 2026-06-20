@@ -33,6 +33,31 @@ vars? You can still set `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` /
 
 ---
 
+## 🧩 Skills (Claude Code compatible)
+
+Skills are reusable expertise the agent loads **on demand**. A skill is just a
+folder with a `SKILL.md` (YAML frontmatter `name`/`description` + markdown
+instructions, optionally bundling scripts). vcode reads them from:
+
+- `~/.vanta-code/skills/<name>/SKILL.md` (and `./.vanta-code/skills/` per-project)
+- **`~/.claude/skills/<name>/SKILL.md`** — so your existing **Claude Code skills work as-is**.
+
+The agent sees each skill's name + description, and calls the `use_skill` tool to
+load a skill's full instructions when a task matches. List them with **`/skills`**.
+vcode ships with `vanta-web-app` and `vanta-game` skills so it's an expert at
+building Vanta apps and games out of the box.
+
+```sh
+mkdir -p ~/.vanta-code/skills/my-skill
+cat > ~/.vanta-code/skills/my-skill/SKILL.md <<'EOF'
+---
+name: my-skill
+description: What this is for and when to use it.
+---
+Step-by-step instructions the agent should follow...
+EOF
+```
+
 ## 📱 On a phone (Android or iPhone)
 
 vcode and Vanta are pure Python, so they run in a mobile terminal app. You'll
@@ -113,10 +138,10 @@ Ctrl, and the arrow keys**.
 - **Speaks Vanta natively** — its system prompt is a compact, accurate Vanta
   reference (plain-English syntax, `serve`/`http_get`/filesystem builtins, the
   `{{ }}` brace rule), so the code it writes actually runs.
-- **Real tools (12)** — `read_file`, `write_file`, **`edit_file`** (surgical
+- **Real tools (13)** — `read_file`, `write_file`, **`edit_file`** (surgical
   find/replace), **`search`** (grep), **`glob`**, `make_dir`, `move_path`,
   `delete_path`, `run_vanta`, **`run_app`** (pops the app in a movable window),
-  and `bash`. Full filesystem access; writes are frictionless, deletes/shell
+  `bash`, and **`use_skill`** (load a Skill on demand). Full filesystem access; writes are frictionless, deletes/shell
   confirm once.
 - **Live diffs** — every write/edit shows a Claude-Code-style diff (`+` green,
   `-` red, with line numbers).
