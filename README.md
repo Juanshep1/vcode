@@ -44,8 +44,13 @@ instructions, optionally bundling scripts). vcode reads them from:
 
 The agent sees each skill's name + description, and calls the `use_skill` tool to
 load a skill's full instructions when a task matches. List them with **`/skills`**.
-vcode ships with `vanta-web-app` and `vanta-game` skills so it's an expert at
-building Vanta apps and games out of the box.
+
+**Grab a pile in one command:** `/skills install` clones Anthropic's official
+skills (pdf, docx, xlsx, pptx, frontend-design, mcp-builder, skill-creator,
+webapp-testing, canvas-design, brand-guidelines, …) into your skills folder. Add
+any other repo with `/skills install owner/repo` (or a full git URL). vcode also
+ships `vanta-web-app` and `vanta-game` skills, so it's an expert at building Vanta
+apps and games out of the box.
 
 ```sh
 mkdir -p ~/.vanta-code/skills/my-skill
