@@ -135,9 +135,10 @@ Ctrl, and the arrow keys**.
 
 - **Permission modes:** Shift+Tab cycles them — but if your keyboard can't send it,
   just run **`/mode`** (cycles default → auto-accept → plan), or `/auto` / `/plan`.
-- **The `/` menu:** press `/`, then **type to filter** and **Enter** to pick — you
-  don't strictly need the arrow keys (use them to disambiguate similar commands).
-- **`@file` completion** works with the Tab key from the extra-keys row.
+- **Slash commands:** just type `/` and keep typing — the matching command
+  **autosuggests inline** (shown in blue, with the rest as faint ghost text); press
+  **Tab** to fill it in. `/` alone + **Tab** opens the arrow-key menu to browse.
+- **`@file` and `#skill` completion** work with the Tab key from the extra-keys row.
 
 ---
 
