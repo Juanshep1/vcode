@@ -43,7 +43,19 @@ instructions, optionally bundling scripts). vcode reads them from:
 - **`~/.claude/skills/<name>/SKILL.md`** — so your existing **Claude Code skills work as-is**.
 
 The agent sees each skill's name + description, and calls the `use_skill` tool to
-load a skill's full instructions when a task matches. List them with **`/skills`**.
+load a skill's full instructions when a task matches. Browse them with **`/skills`**.
+
+**⭐ My Skills — your favourites, one keystroke away.** With hundreds installed, you
+don't want to scroll the whole list every time. In **`/skills`**, highlight a skill
+and press **Enter** to **pin it** to *My Skills* (pinned ones show a ★). Then:
+
+- **`/myskills`** opens a short browser of *just your pinned skills* — press **Enter**
+  on one to **load it** into the conversation, so the agent applies it to your next
+  request.
+- Your pinned skills also appear right in the **`/` menu** and are typeable directly —
+  e.g. just type **`/pdf`** to load the pdf skill. `/skills remove <name>` unpins.
+
+Pins persist to `~/.vanta-code/myskills.json`.
 
 **Grab a pile in one command:** `/skills install` clones Anthropic's official
 skills (pdf, docx, xlsx, pptx, frontend-design, mcp-builder, skill-creator,
@@ -178,6 +190,8 @@ Switch live with **`/provider`**. The **`/model`** picker fetches the provider's
 | `/model [n\|name]` | pick a model (type to filter the full list) |
 | `/themes` | color theme: ember · synthwave · matrix · ice · gold · mono |
 | `/init` | scan the project and write a `VANTA.md` (auto-loaded next time) |
+| `/skills` | browse skills; **Enter** pins one to **My Skills** (★) |
+| `/myskills` | your pinned skills; **Enter** loads one to use (also: `/<skill-name>`) |
 | `/resume` | reload your last session (or start with `vcode --continue`) |
 | `/compact` | summarize the conversation (also automatic) |
 | `/auto`, `/cwd`, `/clear`, `/exit` | … |
