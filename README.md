@@ -135,9 +135,12 @@ Ctrl, and the arrow keys**.
 
 - **Permission modes:** Shift+Tab cycles them — but if your keyboard can't send it,
   just run **`/mode`** (cycles default → auto-accept → plan), or `/auto` / `/plan`.
-- **Slash commands:** just type `/` and keep typing — the matching command
-  **autosuggests inline** (shown in blue, with the rest as faint ghost text); press
-  **Tab** to fill it in. `/` alone + **Tab** opens the arrow-key menu to browse.
+- **Slash commands:** press `/` on an empty line to open a **dropdown** — arrow
+  ↑/↓ to browse (your pinned skills are at the top), **Enter/Tab** to pick. Or just
+  keep typing and it collapses to an **inline autosuggest** (command in blue, rest as
+  faint ghost) you accept with **Tab**.
+- **Long prompts word-wrap** onto aligned continuation lines instead of scrolling off
+  to the right.
 - **`@file` and `#skill` completion** work with the Tab key from the extra-keys row.
 
 ---
