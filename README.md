@@ -48,7 +48,7 @@ load a skill's full instructions when a task matches. List them with **`/skills`
 **Grab a pile in one command:** `/skills install` clones Anthropic's official
 skills (pdf, docx, xlsx, pptx, frontend-design, mcp-builder, skill-creator,
 webapp-testing, canvas-design, brand-guidelines, …) into your skills folder. Add
-any other repo with `/skills install owner/repo` (or a full git URL). vcode also
+any other repo with `/skills install owner/repo` (or a full git URL). With hundreds of skills installed, vcode keeps the prompt lean (it lists names only and the agent uses `find_skill` to search them on demand). vcode also
 ships `vanta-web-app` and `vanta-game` skills, so it's an expert at building Vanta
 apps and games out of the box.
 
@@ -143,7 +143,7 @@ Ctrl, and the arrow keys**.
 - **Speaks Vanta natively** — its system prompt is a compact, accurate Vanta
   reference (plain-English syntax, `serve`/`http_get`/filesystem builtins, the
   `{{ }}` brace rule), so the code it writes actually runs.
-- **Real tools (13)** — `read_file`, `write_file`, **`edit_file`** (surgical
+- **Real tools (14)** — `read_file`, `write_file`, **`edit_file`** (surgical
   find/replace), **`search`** (grep), **`glob`**, `make_dir`, `move_path`,
   `delete_path`, `run_vanta`, **`run_app`** (pops the app in a movable window),
   `bash`, and **`use_skill`** (load a Skill on demand). Full filesystem access; writes are frictionless, deletes/shell
