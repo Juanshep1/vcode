@@ -57,6 +57,11 @@ and press **Enter** to **pin it** to *My Skills* (pinned ones show a ★). Then:
 
 Pins persist to `~/.vanta-code/myskills.json`.
 
+**Reference a skill right in your prompt** with **`#skill-name`** — no need to load it
+first. Writing *"make a **#pdf** invoice generator"* inlines the pdf skill's
+instructions into just that message. Tab-completes (`#pd`→`#pdf`), and only expands
+when the name matches an installed skill, so ordinary `#` (issue #5, C#) is left alone.
+
 **Grab a pile in one command:** `/skills install` clones Anthropic's official
 skills (pdf, docx, xlsx, pptx, frontend-design, mcp-builder, skill-creator,
 webapp-testing, canvas-design, brand-guidelines, …) into your skills folder. Add
@@ -198,6 +203,7 @@ Switch live with **`/provider`**. The **`/model`** picker fetches the provider's
 | **Esc** | interrupt the agent mid-task |
 | `!command` | run a shell command directly |
 | `@path` | inline a file's contents into your message |
+| `#skill-name` | reference a Skill inline in your prompt (e.g. `make a #pdf invoice`) |
 | `"""` | start a multi-line message (end with `"""`) |
 | ↑ / ↓ | recall previous prompts |
 
