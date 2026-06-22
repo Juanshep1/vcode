@@ -98,12 +98,16 @@ vcode                                     # it'll prompt you for an API key
 ### iPhone / iPad — [iSH](https://apps.apple.com/app/ish-shell/id1436902243)
 Install **iSH** from the App Store (a tiny Linux shell). Then:
 ```sh
-apk update && apk add python3 curl
+apk update && apk add python3 curl ca-certificates   # ca-certificates is REQUIRED (else HTTPS fails)
 curl -fsSL https://raw.githubusercontent.com/Juanshep1/vanbrew/main/install.sh | sh
 . ~/.profile
-vanbrew install vanta vcode
+vanbrew install vcode                     # pulls vanta automatically
 vcode                                     # it'll prompt you for an API key
 ```
+> **`vcode` not found / "no formula named vcode"?** Your bundled catalog is old.
+> Re-run the installer line above (it fetches the latest Vanbrew), or run
+> `vanbrew update` first, then `vanbrew install vcode`. iSH ships **without CA
+> certs**, so if downloads fail with a TLS/SSL error, run `apk add ca-certificates`.
 
 ### Any terminal with Python (fallback — also works in a-Shell on iOS)
 If a package manager or the installer isn't available, download the two files
