@@ -88,12 +88,15 @@ need an **API key** and **internet**.
 ### Android — [Termux](https://f-droid.org/packages/com.termux/)
 Install **Termux from F-Droid** (the Play Store build is outdated). Then:
 ```sh
-pkg update -y && pkg install -y python
+pkg update -y && pkg install -y python curl
 curl -fsSL https://raw.githubusercontent.com/Juanshep1/vanbrew/main/install.sh | sh
 . ~/.bashrc 2>/dev/null ; . ~/.profile 2>/dev/null
-vanbrew install vanta vcode
+vanbrew install vcode                     # pulls vanta automatically
 vcode                                     # it'll prompt you for an API key
 ```
+> **`vcode` not found / "no formula named vcode"?** You have an older bundled
+> catalog — re-run the installer line above (it fetches the latest Vanbrew), or
+> run `vanbrew update` first, then `vanbrew install vcode`.
 
 ### iPhone / iPad — [iSH](https://apps.apple.com/app/ish-shell/id1436902243)
 Install **iSH** from the App Store (a tiny Linux shell). Then:
