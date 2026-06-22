@@ -127,11 +127,14 @@ vcode
 
 **To keep your key**, append it too: `echo 'export OPENROUTER_API_KEY="sk-or-..."' >> ~/.profile`.
 
-> **On phones:** vcode is great for writing, editing, running and chatting about
-> Vanta on the go. The one desktop-only feature is `run_app`'s **movable app
-> window** (it needs a desktop browser) — for visual apps, run a `serve()`
-> program and open `http://localhost:<port>` in your phone's browser. iSH is
-> emulated, so it's slower than Termux.
+> **On phones (servers + web apps work on-device):** `serve()` is pure Python
+> sockets, so Vanta runs a real web server right on your phone. When you ask vcode
+> to build a visual app, it serves it and **opens `http://localhost:<port>/` in your
+> phone's browser** (and prints a tappable link). On Termux, `pkg install termux-api`
+> lets it auto-open; otherwise just tap the printed URL. (For visual apps on a phone,
+> prefer a `serve()` app over the `file://` pattern — mobile browsers restrict
+> `file://`.) The only desktop-only bit is the *movable* app window; iSH is emulated,
+> so it's slower than Termux.
 
 ### Phone-keyboard tips
 The terminal UI is mobile-hardened (it survives laggy/split key input and the app
